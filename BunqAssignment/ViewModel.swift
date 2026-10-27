@@ -1,23 +1,25 @@
-//
-//  ViewModel.swift
-//  BunqAssignment
-//
-
-import Combine
 import Foundation
-import SwiftUI
+import Observation
 
 @MainActor
-public final class BankViewModel: ObservableObject {
-    @Published var balance: Double = 1000.0
-    @Published var transactions: [Transaction] = []
-    @Published var localPaymentState: LocalPaymentState?
-    @Published var networkError: String?
+@Observable
+public final class BankViewModel {
+    public private(set) var balanceCents = 100_000
+    public private(set) var transactions: [Transaction] = []
+    public private(set) var localPaymentState: LocalPaymentState?
+    public private(set) var networkError: String?
+    public private(set) var isBalancePossiblyOutOfDate = false
+
+    public var balance: Double {
+        Double(balanceCents) / 100
+    }
 
     private let service: BankServiceProtocol
-    private let userDefaultsKey = "bunq.local.state"
-    private let transactionsDefaultsKey = "bunq.local.txns"
-    private let balanceDefaultsKey = "bunq.local.balance"
+    private let paymentStateKey = "bunq.local.state"
+    private let transactionsKey = "bunq.local.txns"
+    private let balanceKey = "bunq.local.balance"
+    private let cursorKey = "bunq.local.cursor"
+    private let staleBalanceKey = "bunq.local.staleBalance"
     private var lastCursor: Int?
 
     public init(service: BankServiceProtocol) {
@@ -26,64 +28,50 @@ public final class BankViewModel: ObservableObject {
     }
 
     public func loadFromDisk() {
-       
-        if let data = UserDefaults.standard.data(forKey: userDefaultsKey) {
+        if let data = UserDefaults.standard.data(forKey: paymentStateKey) {
             localPaymentState = try? JSONDecoder().decode(LocalPaymentState.self, from: data)
         }
-        if let data = UserDefaults.standard.data(forKey: transactionsDefaultsKey),
+        if let data = UserDefaults.standard.data(forKey: transactionsKey),
            let savedTransactions = try? JSONDecoder().decode([Transaction].self, from: data) {
             transactions = savedTransactions
         }
 
-        let savedBalance = UserDefaults.standard.integer(forKey: balanceDefaultsKey)
-        if savedBalance != 0 {
-            balance = Double(savedBalance) / 100
+        if UserDefaults.standard.object(forKey: balanceKey) != nil {
+            balanceCents = UserDefaults.standard.integer(forKey: balanceKey)
         }
+        if UserDefaults.standard.object(forKey: cursorKey) != nil {
+            lastCursor = UserDefaults.standard.integer(forKey: cursorKey)
+        }
+        isBalancePossiblyOutOfDate = UserDefaults.standard.bool(forKey: staleBalanceKey)
     }
 
+    /// Refreshes the local view from the bank. It never sends a payment by itself.
     public func sync() async {
         networkError = nil
 
-        if case let .failedMidFlight(key, amount, destination, description) = localPaymentState {
-            await retryPaymentFlight(
-                key: key,
-                amount: amount,
-                destination: destination,
-                description: description
-            )
-        }
-
         do {
             let response = try await service.fetchFeed(cursor: lastCursor)
-            balance = Double(response.balanceCents) / 100
+            balanceCents = response.balanceCents
             lastCursor = response.cursor
+            isBalancePossiblyOutOfDate = false
 
             for transaction in response.transactions {
                 upsert(transaction)
-
-                if case let .apiPending(localTransaction) = localPaymentState,
-                   localTransaction.id == transaction.id {
-                    localPaymentState = nil
-                }
+                resolveLocalPaymentIfConfirmed(by: transaction)
             }
             saveToDisk()
         } catch {
-            networkError = "Bank is unreachable. Out of date."
+            isBalancePossiblyOutOfDate = true
+            networkError = "Bank is unreachable. Showing the last known balance."
+            saveToDisk()
         }
     }
 
     public func initiatePayment(to destination: String, amountCents: Int, description: String) async {
-        let idempotencyKey = UUID().uuidString
-        networkError = nil
-        localPaymentState = .unconfirmed(
-            idempotencyKey: idempotencyKey,
-            amount: amountCents,
-            destination: destination,
-            desc: description
-        )
-        saveToDisk()
+        guard localPaymentState == nil else { return }
 
-        await executePaymentFlight(
+        let idempotencyKey = UUID().uuidString
+        await sendPayment(
             key: idempotencyKey,
             amount: amountCents,
             destination: destination,
@@ -91,12 +79,35 @@ public final class BankViewModel: ObservableObject {
         )
     }
 
-    private func executePaymentFlight(
+    /// The person explicitly chooses to retry a payment that did not reach the bank.
+    public func retryNotSentPayment() async {
+        guard case let .notSent(key, amount, destination, description) = localPaymentState else {
+            return
+        }
+
+        await sendPayment(
+            key: key,
+            amount: amount,
+            destination: destination,
+            description: description
+        )
+    }
+
+    private func sendPayment(
         key: String,
         amount: Int,
         destination: String,
         description: String
     ) async {
+        networkError = nil
+        localPaymentState = .unconfirmed(
+            idempotencyKey: key,
+            amount: amount,
+            destination: destination,
+            desc: description
+        )
+        saveToDisk()
+
         do {
             let response = try await service.createPayment(
                 to: destination,
@@ -106,7 +117,7 @@ public final class BankViewModel: ObservableObject {
             )
             upsert(response.transaction)
             localPaymentState = .apiPending(transaction: response.transaction)
-            saveToDisk()
+            isBalancePossiblyOutOfDate = false
         } catch let error as URLError {
             handleTransportError(
                 error,
@@ -117,7 +128,7 @@ public final class BankViewModel: ObservableObject {
             )
         } catch let error as NSError where error.domain == NSURLErrorDomain {
             handleTransportError(
-                URLError(.init(rawValue: error.code) ?? .unknown),
+                URLError(URLError.Code(rawValue: error.code)),
                 key: key,
                 amount: amount,
                 destination: destination,
@@ -125,23 +136,9 @@ public final class BankViewModel: ObservableObject {
             )
         } catch {
             localPaymentState = nil
-            saveToDisk()
             networkError = error.localizedDescription
         }
-    }
-
-    private func retryPaymentFlight(
-        key: String,
-        amount: Int,
-        destination: String,
-        description: String
-    ) async {
-        await executePaymentFlight(
-            key: key,
-            amount: amount,
-            destination: destination,
-            description: description
-        )
+        saveToDisk()
     }
 
     private func handleTransportError(
@@ -159,15 +156,36 @@ public final class BankViewModel: ObservableObject {
                 destination: destination,
                 desc: description
             )
-            networkError = "Connection lost. Tap Sync to verify."
+            networkError = "Connection lost. Verify the payment with Sync."
         case .notConnectedToInternet:
-            localPaymentState = nil
-            networkError = "No connection. Payment cancelled."
+            localPaymentState = .notSent(
+                idempotencyKey: key,
+                amount: amount,
+                destination: destination,
+                desc: description
+            )
+            networkError = "No connection. This payment was not sent."
         default:
-            localPaymentState = nil
+            localPaymentState = .notSent(
+                idempotencyKey: key,
+                amount: amount,
+                destination: destination,
+                desc: description
+            )
             networkError = error.localizedDescription
         }
-        saveToDisk()
+        isBalancePossiblyOutOfDate = true
+    }
+
+    private func resolveLocalPaymentIfConfirmed(by transaction: Transaction) {
+        switch localPaymentState {
+        case let .apiPending(localTransaction) where localTransaction.id == transaction.id:
+            localPaymentState = nil
+        case let .failedMidFlight(key, _, _, _) where transaction.idempotencyKey == key:
+            localPaymentState = nil
+        default:
+            break
+        }
     }
 
     private func upsert(_ transaction: Transaction) {
@@ -180,14 +198,20 @@ public final class BankViewModel: ObservableObject {
 
     private func saveToDisk() {
         if let data = try? JSONEncoder().encode(localPaymentState) {
-            UserDefaults.standard.set(data, forKey: userDefaultsKey)
+            UserDefaults.standard.set(data, forKey: paymentStateKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: userDefaultsKey)
+            UserDefaults.standard.removeObject(forKey: paymentStateKey)
         }
         if let data = try? JSONEncoder().encode(transactions) {
-            UserDefaults.standard.set(data, forKey: transactionsDefaultsKey)
+            UserDefaults.standard.set(data, forKey: transactionsKey)
         }
-        UserDefaults.standard.set(Int(balance * 100), forKey: balanceDefaultsKey)
+        UserDefaults.standard.set(balanceCents, forKey: balanceKey)
+        if let lastCursor {
+            UserDefaults.standard.set(lastCursor, forKey: cursorKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: cursorKey)
+        }
+        UserDefaults.standard.set(isBalancePossiblyOutOfDate, forKey: staleBalanceKey)
     }
 
     public func clearError() {
