@@ -29,6 +29,8 @@ class BunqAssignmentTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: "bunq.local.state")
         UserDefaults.standard.removeObject(forKey: "bunq.local.txns")
         UserDefaults.standard.removeObject(forKey: "bunq.local.balance")
+        UserDefaults.standard.removeObject(forKey: "bunq.local.cursor")
+        UserDefaults.standard.removeObject(forKey: "bunq.local.staleBalance")
         
         viewModel = BankViewModel(service: service)
     }
@@ -102,20 +104,25 @@ class BunqAssignmentTests: XCTestCase {
         XCTAssertEqual(viewModel.balance, 985.0)
     }
 
-    func testScenario4_KilledMidFlight() async {
-        // Test Partition A: Process lifecycle exit occurs before reaching server context limits
+    func testScenario4_KilledBeforeRequestReachesBank() async {
         FakeBank.unreachable = true
         await viewModel.initiatePayment(to: "alex", amountCents: 2500, description: "lunch")
         
         // Re-simulate app launch restoration phase maps safely
         let restartedVM = BankViewModel(service: service)
-        XCTAssertNil(restartedVM.localPaymentState)
-        
-        // Test Partition B: Server creates mutation inside database registers but response gets lost before save completes
-        FakeBank.unreachable = false
+        if case .notSent = restartedVM.localPaymentState {
+            // The request never reached the bank, so the person must opt in to a retry.
+        } else {
+            XCTFail("Expected the interrupted payment to be shown as not sent")
+        }
+        XCTAssertTrue(FakeBank.transactions.isEmpty)
+    }
+
+    func testScenario4_KilledAfterLostAnswer() async {
+        let lostAnswerVM = BankViewModel(service: service)
         FakeBank.lostAnswer = true
         
-        await viewModel.initiatePayment(to: "alex", amountCents: 2500, description: "lunch")
+        await lostAnswerVM.initiatePayment(to: "alex", amountCents: 2500, description: "lunch")
         
         // Kill simulation event occurs directly during execution phase transitions
         let recoveryVM = BankViewModel(service: service)
@@ -125,6 +132,7 @@ class BunqAssignmentTests: XCTestCase {
         FakeBank.settlePendingPayments()
         await recoveryVM.sync()
         XCTAssertEqual(recoveryVM.balance, 975.0)
+        XCTAssertEqual(FakeBank.transactions.count, 1)
     }
 
     func testScenario5_LateRejection() async {
@@ -134,6 +142,7 @@ class BunqAssignmentTests: XCTestCase {
         XCTAssertEqual(viewModel.balance, 975.0)
         
         let targetId = viewModel.transactions.first!.id
+        FakeBank.lateRejection = true
         FakeBank.triggerLateRejection(id: targetId, reason: "The receiving bank refused it")
         
         await viewModel.sync()
@@ -163,15 +172,18 @@ class BunqAssignmentTests: XCTestCase {
         FakeBank.unreachable = true
         
         await viewModel.initiatePayment(to: "alex", amountCents: 2500, description: "lunch")
-        XCTAssertEqual(viewModel.networkError, "No connection. Payment cancelled.")
+        XCTAssertEqual(viewModel.networkError, "No connection. This payment was not sent.")
         
         FakeBank.unreachable = false
         FakeBank.busy = true
-        
-        // This execution loop evaluates network client capabilities to auto-resolve 429 delays cleanly
-        FakeBank.busy = false
+        await viewModel.retryNotSentPayment()
+        XCTAssertEqual(FakeBank.transactions.count, 1)
+        XCTAssertEqual(FakeBank.transactions.first?.status, .pending)
         FakeBank.settlePendingPayments()
         
         await viewModel.sync()
+        XCTAssertEqual(viewModel.balance, 975.0)
+        XCTAssertEqual(viewModel.transactions.count, 1)
+        XCTAssertEqual(viewModel.transactions.first?.status, .completed)
     }
 }
