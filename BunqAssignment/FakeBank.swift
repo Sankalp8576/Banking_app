@@ -11,6 +11,8 @@ public final class FakeBank: URLProtocol {
     public static var busy = false
     public static var repeatedEntries = false
     public static var balanceAhead = false
+    /// Enables a manually triggered rejection after a payment has completed.
+    public static var lateRejection = false
 
     private static let lock = NSLock()
     public static var balances: [String: Int] = [
@@ -38,6 +40,7 @@ public final class FakeBank: URLProtocol {
         busy = false
         repeatedEntries = false
         balanceAhead = false
+        lateRejection = false
     }
 
     public static func simulateExternalPayment(from: String, to: String, amount: Int, description: String) {
@@ -91,7 +94,8 @@ public final class FakeBank: URLProtocol {
         lock.lock()
         defer { lock.unlock() }
 
-        guard let index = transactions.firstIndex(where: { $0.id == id }),
+        guard lateRejection,
+              let index = transactions.firstIndex(where: { $0.id == id }),
               transactions[index].status == .completed else {
             return
         }
@@ -101,6 +105,7 @@ public final class FakeBank: URLProtocol {
         balances[transactions[index].fromUsername, default: 0] += transactions[index].amountCents
         balances[transactions[index].toUsername, default: 0] -= transactions[index].amountCents
         recordChange(for: id)
+        lateRejection = false
     }
 
     override public class func canInit(with request: URLRequest) -> Bool {
