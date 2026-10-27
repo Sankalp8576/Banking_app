@@ -14,6 +14,7 @@ class BunqAssignmentTests: XCTestCase {
     var session: URLSession!
     var service: BankService!
     var viewModel: BankViewModel!
+
     override func setUp() {
         super.setUp()
         // Standard injection design context for isolated testing protocols
@@ -56,6 +57,32 @@ class BunqAssignmentTests: XCTestCase {
         XCTAssertEqual(viewModel.balance, 975.0)
         XCTAssertEqual(viewModel.transactions.count, 1)
         XCTAssertEqual(viewModel.transactions.first?.status, .completed)
+    }
+
+    func testScenario2_LostAnswer() async {
+        FakeBank.lostAnswer = true
+        
+        await viewModel.initiatePayment(to: "alex", amountCents: 2500, description: "lunch")
+        
+        // Verify payment structural execution happened inside Fake ledger safely despite local loss context
+        XCTAssertEqual(FakeBank.transactions.count, 1)
+        
+        // Directly check if the enum matches what we expect
+        if case .failedMidFlight(_, let amount, let destination, let desc) = viewModel.localPaymentState {
+            XCTAssertEqual(amount, 2500)
+            XCTAssertEqual(destination, "alex")
+            XCTAssertEqual(desc, "lunch")
+        } else {
+            XCTFail("Expected state to be .failedMidFlight but got \(String(describing: viewModel.localPaymentState))")
+        }
+        
+        // Recovery pathway
+        FakeBank.lostAnswer = false
+        FakeBank.settlePendingPayments()
+        
+        await viewModel.sync()
+        XCTAssertEqual(viewModel.balance, 975.0)
+        XCTAssertNil(viewModel.localPaymentState)
     }
 
     }
