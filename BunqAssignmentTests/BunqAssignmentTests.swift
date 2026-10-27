@@ -7,8 +7,56 @@
 
 import XCTest
 @testable import BunqAssignment
+
+@MainActor
 class BunqAssignmentTests: XCTestCase {
+    var configuration: URLSessionConfiguration!
+    var session: URLSession!
+    var service: BankService!
+    var viewModel: BankViewModel!
     override func setUp() {
         super.setUp()
+        // Standard injection design context for isolated testing protocols
+        configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FakeBank.self]
+        session = URLSession(configuration: configuration)
+        service = BankService(session: session)
+        
+        FakeBank.reset()
+        
+        // Purge disk layer clean
+        UserDefaults.standard.removeObject(forKey: "bunq.local.state")
+        UserDefaults.standard.removeObject(forKey: "bunq.local.txns")
+        UserDefaults.standard.removeObject(forKey: "bunq.local.balance")
+        
+        viewModel = BankViewModel(service: service)
+    }
+
+    func testScenario1_HappyPath() async {
+        XCTAssertEqual(viewModel.balance, 1000.0)
+        
+        // Step 1 & 2: Initiate transfer transaction path validation triggers unconfirmed display instantly
+        let paymentTask = Task {
+            await viewModel.initiatePayment(to: "alex", amountCents: 2500, description: "lunch")
+        }
+        
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertNotNil(viewModel.localPaymentState) // Displays as unconfirmed inside UI boundaries
+        
+        await paymentTask.value
+        
+        XCTAssertEqual(FakeBank.transactions.count, 1)
+        XCTAssertEqual(FakeBank.transactions.first?.status, .pending)
+        
+        // Step 3: Settle the pending item inside structural ledger elements
+        FakeBank.settlePendingPayments()
+        
+        // Step 4: Perform verification account fetch sweeps
+        await viewModel.sync()
+        XCTAssertEqual(viewModel.balance, 975.0)
+        XCTAssertEqual(viewModel.transactions.count, 1)
+        XCTAssertEqual(viewModel.transactions.first?.status, .completed)
+    }
+
     }
 }
