@@ -1,8 +1,3 @@
-//
-//  Models.swift
-//  BunqAssignment
-//
-
 import Foundation
 
 public struct Transaction: Codable, Identifiable, Equatable {
@@ -20,13 +15,12 @@ public struct Transaction: Codable, Identifiable, Equatable {
         case fromUsername = "from_username"
         case toUsername = "to_username"
         case amountCents = "amount_cents"
-        case description
-        case status
+        case description, status
         case rejectionReason = "rejection_reason"
         case idempotencyKey = "idempotency_key"
     }
 
-    public enum Status: String, Codable {
+    public enum Status: String, Codable, Equatable {
         case pending
         case completed
         case rejected
@@ -72,8 +66,10 @@ public struct APIErrorPayload: Codable {
     public let error: ErrorDetail
 }
 
+/// A durable local record of a payment whose bank outcome is not yet confirmed.
 public enum LocalPaymentState: Codable, Equatable {
     case unconfirmed(idempotencyKey: String, amount: Int, destination: String, desc: String)
     case apiPending(transaction: Transaction)
     case failedMidFlight(idempotencyKey: String, amount: Int, destination: String, desc: String)
+    case notSent(idempotencyKey: String, amount: Int, destination: String, desc: String)
 }
