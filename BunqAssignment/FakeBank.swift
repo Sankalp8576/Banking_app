@@ -12,6 +12,80 @@ public final class FakeBank: URLProtocol {
     public static var repeatedEntries = false
     public static var balanceAhead = false
 
+    private static let lock = NSLock()
+    public static var balances: [String: Int] = [
+        "eva": 100000, "alex": 100000, "mila": 100000, "noor": 100000
+    ]
+    public static var transactions: [Transaction] = []
+    public static var cursorCount = 0
+    public static var unreleasedTransactions: [Transaction] = []
+
+    private static var changeLog: [(cursor: Int, transactionID: String)] = []
+    private static var busyCounter = 0
+
+    public static func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        balances = ["eva": 100000, "alex": 100000, "mila": 100000, "noor": 100000]
+        transactions = []
+        unreleasedTransactions = []
+        cursorCount = 0
+        changeLog = []
+        busyCounter = 0
+        lostAnswer = false
+        unreachable = false
+        busy = false
+        repeatedEntries = false
+        balanceAhead = false
+    }
+
+    public static func simulateExternalPayment(from: String, to: String, amount: Int, description: String) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        balances[from, default: 0] -= amount
+        balances[to, default: 0] += amount
+        let transaction = Transaction(
+            id: "txn_\(UUID().uuidString.prefix(8).lowercased())",
+            fromUsername: from,
+            toUsername: to,
+            amountCents: amount,
+            description: description,
+            status: .completed,
+            rejectionReason: nil,
+            idempotencyKey: nil
+        )
+
+        if balanceAhead && to == "eva" {
+            unreleasedTransactions.append(transaction)
+        } else {
+            transactions.append(transaction)
+            recordChange(for: transaction.id)
+        }
+    }
+
+    public static func releaseAheadPayments() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        for transaction in unreleasedTransactions {
+            transactions.append(transaction)
+            recordChange(for: transaction.id)
+        }
+        unreleasedTransactions.removeAll()
+    }
+
+    public static func settlePendingPayments() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        for index in transactions.indices where transactions[index].status == .pending {
+            transactions[index].status = .completed
+            balances[transactions[index].toUsername, default: 0] += transactions[index].amountCents
+            recordChange(for: transactions[index].id)
+        }
+    }
 
     public static func triggerLateRejection(id: String, reason: String) {
         lock.lock()
