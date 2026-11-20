@@ -59,6 +59,12 @@ public final class BankViewModel {
                 upsert(transaction)
                 resolveLocalPaymentIfConfirmed(by: transaction)
             }
+
+            // If the app died after persisting the tap but before it learned the
+            // request result, this successful feed response is authoritative.
+            // A matching transaction has already cleared the local state above;
+            // no match means the bank did not receive the payment.
+            markUnresolvedPaymentAsNotSentAfterSuccessfulSync()
             saveToDisk()
         } catch {
             isBalancePossiblyOutOfDate = true
@@ -183,6 +189,23 @@ public final class BankViewModel {
             localPaymentState = nil
         case let .failedMidFlight(key, _, _, _) where transaction.idempotencyKey == key:
             localPaymentState = nil
+        case let .unconfirmed(key, _, _, _) where transaction.idempotencyKey == key:
+            localPaymentState = nil
+        default:
+            break
+        }
+    }
+
+    private func markUnresolvedPaymentAsNotSentAfterSuccessfulSync() {
+        switch localPaymentState {
+        case let .unconfirmed(key, amount, destination, description),
+             let .failedMidFlight(key, amount, destination, description):
+            localPaymentState = .notSent(
+                idempotencyKey: key,
+                amount: amount,
+                destination: destination,
+                desc: description
+            )
         default:
             break
         }

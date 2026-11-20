@@ -105,17 +105,32 @@ class BunqAssignmentTests: XCTestCase {
     }
 
     func testScenario4_KilledBeforeRequestReachesBank() async {
-        FakeBank.unreachable = true
-        await viewModel.initiatePayment(to: "alex", amountCents: 2500, description: "lunch")
-        
-        // Re-simulate app launch restoration phase maps safely
+        // This is the exact state persisted synchronously before URLSession starts.
+        // Creating a new view model discards the original process's memory.
+        let interruptedPayment = LocalPaymentState.unconfirmed(
+            idempotencyKey: "killed-before-request",
+            amount: 2500,
+            destination: "alex",
+            desc: "lunch"
+        )
+        UserDefaults.standard.set(
+            try! JSONEncoder().encode(interruptedPayment),
+            forKey: "bunq.local.state"
+        )
+
         let restartedVM = BankViewModel(service: service)
+        await restartedVM.sync()
+
         if case .notSent = restartedVM.localPaymentState {
-            // The request never reached the bank, so the person must opt in to a retry.
+            // A successful empty feed proves the request did not reach the bank.
         } else {
-            XCTFail("Expected the interrupted payment to be shown as not sent")
+            XCTFail("Expected the interrupted payment to be recovered as not sent")
         }
         XCTAssertTrue(FakeBank.transactions.isEmpty)
+
+        // The visible Try Again action reuses the durable idempotency key.
+        await restartedVM.retryNotSentPayment()
+        XCTAssertEqual(FakeBank.transactions.count, 1)
     }
 
     func testScenario4_KilledAfterLostAnswer() async {
