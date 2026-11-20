@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		F67C9887309060CB001456C7 /* NOTES.md in Resources */ = {isa = PBXBuildFile; fileRef = F67C9886309060CB001456C7 /* NOTES.md */; };
+		F6BD180530B0742D005F27A6 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = F6BD180430B0742D005F27A6 /* README.md */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,6 +33,7 @@
 		F644C9D7308F4CCA00928BCC /* BunqAssignmentTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BunqAssignmentTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F644C9E1308F4CCA00928BCC /* BunqAssignmentUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BunqAssignmentUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F67C9886309060CB001456C7 /* NOTES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = NOTES.md; sourceTree = "<group>"; };
+		F6BD180430B0742D005F27A6 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -48,6 +50,11 @@
 		F644C9E4308F4CCA00928BCC /* BunqAssignmentUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = BunqAssignmentUITests;
+			sourceTree = "<group>";
+		};
+		F6BD180130B07365005F27A6 /* Screenshots */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Screenshots;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -74,10 +81,12 @@
 		F644C9C1308F4CC900928BCC = {
 			isa = PBXGroup;
 			children = (
+				F6BD180130B07365005F27A6 /* Screenshots */,
 				F644C9CC308F4CC900928BCC /* BunqAssignment */,
 				F644C9DA308F4CCA00928BCC /* BunqAssignmentTests */,
 				F644C9E4308F4CCA00928BCC /* BunqAssignmentUITests */,
 				F67C9886309060CB001456C7 /* NOTES.md */,
+				F6BD180430B0742D005F27A6 /* README.md */,
 				F644C9CB308F4CC900928BCC /* Products */,
 			);
 			sourceTree = "<group>";
@@ -107,6 +116,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				F644C9CC308F4CC900928BCC /* BunqAssignment */,
+				F6BD180130B07365005F27A6 /* Screenshots */,
 			);
 			name = BunqAssignment;
 			productName = BunqAssignment;
@@ -204,6 +214,7 @@
 			isa = PBXResourcesBuildPhase;
 			files = (
 				F67C9887309060CB001456C7 /* NOTES.md in Resources */,
+				F6BD180530B0742D005F27A6 /* README.md in Resources */,
 			);
 		};
 		F644C9D5308F4CCA00928BCC /* Resources */ = {
